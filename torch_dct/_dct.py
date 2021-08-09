@@ -4,6 +4,37 @@ import torch.nn as nn
 import torch.fft
 
 
+TORCH_VER = float(torch.__version__[:3])
+
+def _rfft(x, signal_ndim=1, onesided=True):
+    # b = torch.Tensor([[1,2,3,4,5],[2,3,4,5,6]])
+    # b = torch.Tensor([[1,2,3,4,5,6],[2,3,4,5,6,7]])
+    # torch 1.8.0 torch.fft.rfft to torch 1.5.0 torch.rfft as signal_ndim=1
+    # written by mzero
+    odd_shape1 = (x.shape[1] % 2 != 0)
+    x = torch.fft.rfft(x)
+    x = torch.cat([x.real.unsqueeze(dim=2), x.imag.unsqueeze(dim=2)], dim=2)
+    if onesided == False:
+        _x = x[:, 1:, :].flip(dims=[1]).clone() if odd_shape1 else x[:, 1:-1, :].flip(dims=[1]).clone()
+        _x[:,:,1] = -1 * _x[:,:,1]
+        x = torch.cat([x, _x], dim=1)
+    return x
+
+def _irfft(x, signal_ndim=1, onesided=True):
+    # b = torch.Tensor([[1,2,3,4,5],[2,3,4,5,6]])
+    # b = torch.Tensor([[1,2,3,4,5,6],[2,3,4,5,6,7]])
+    # torch 1.8.0 torch.fft.irfft to torch 1.5.0 torch.irfft as signal_ndim=1
+    # written by mzero
+    if onesided == False:
+        res_shape1 = x.shape[1]
+        x = x[:,:(x.shape[1] // 2 + 1),:]
+        x = torch.complex(x[:,:,0].float(), x[:,:,1].float())
+        x = torch.fft.irfft(x, n=res_shape1)
+    else:
+        x = torch.complex(x[:,:,0].float(), x[:,:,1].float())
+        x = torch.fft.irfft(x)
+    return x
+
 def dct1(x):
     """
     Discrete Cosine Transform, Type I
@@ -47,8 +78,12 @@ def dct(x, norm=None):
 
     v = torch.cat([x[:, ::2], x[:, 1::2].flip([1])], dim=1)
 
-    # Vc = torch.rfft(v, 1, onesided=False)
-    Vc = torch.view_as_real(torch.fft.fft(v, dim=1))
+    if TORCH_VER >= 1.8:
+        Vc = _rfft(v, 1, onesided=False)
+    elif TORCH_VER >= 1.7:
+        Vc = torch.view_as_real(torch.fft.fft(v, dim=1))
+    else:
+        Vc = torch.rfft(v, 1, onesided=False)
 
     k = - torch.arange(N, dtype=x.dtype, device=x.device)[None, :] * np.pi / (2 * N)
     W_r = torch.cos(k)
@@ -100,8 +135,12 @@ def idct(X, norm=None):
 
     V = torch.cat([V_r.unsqueeze(2), V_i.unsqueeze(2)], dim=2)
 
-    # v = torch.irfft(V, 1, onesided=False)
-    v = torch.fft.irfft(torch.view_as_complex(V), n=V.shape[1], dim=1)
+    if TORCH_VER >= 1.8:
+        v = _irfft(V, 1, onesided=False)
+    elif TORCH_VER >= 1.7:
+        v = torch.fft.irfft(torch.view_as_complex(V), n=V.shape[1], dim=1)
+    else:
+        v = torch.irfft(V, 1, onesided=False)
 
     x = v.new_zeros(v.shape)
     x[:, ::2] += v[:, :N - (N // 2)]
